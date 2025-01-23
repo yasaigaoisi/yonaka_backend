@@ -24,7 +24,7 @@ class ShopsController < ApplicationController
     headers = {
       "Content-Type" => "application/json",
       "X-Goog-Api-Key" => api_key,
-      "X-Goog-FieldMask" => "places.id"
+      "X-Goog-FieldMask" => "places.displayName,places.id"
     }
 
     # APIエンドポイント
@@ -39,23 +39,17 @@ class ShopsController < ApplicationController
 
     places = response.parsed_response["places"]
 
-    result = []
+    # 詳細情報を取得して夜中2時まで営業しているかを判定
+    filtered_places = places.select do |place|
+      place_id = place["id"]
+      details = fetch_place_details(place_id, api_key)
 
-    places.each do |place|
-      result << fetch_place_details(place["id"], api_key)
+      # 営業時間が取得できない場合は除外
+      next false unless details && details["currentOpeningHours"] && details["currentOpeningHours"]["periods"]
+
+      # 営業時間の判定
+      open_late?(details["currentOpeningHours"]["periods"])
     end
-
-    # # 詳細情報を取得して夜中2時まで営業しているかを判定
-    # filtered_places = places.select do |place|
-    #   place_id = place["place_id"]
-    #   details = fetch_place_details(place_id, api_key)
-
-    #   # 営業時間が取得できない場合は除外
-    #   next false unless details && details["opening_hours"] && details["opening_hours"]["periods"]
-
-    #   # 営業時間の判定
-    #   open_late?(details["opening_hours"]["periods"])
-    # end
 
     # # 必要な情報だけを整形して返す
     # result = filtered_places.map do |place|
@@ -67,7 +61,7 @@ class ShopsController < ApplicationController
     #   }
     # end
 
-    render json: result
+    render json: filtered_places
   end
 
   private
@@ -81,7 +75,7 @@ class ShopsController < ApplicationController
     headers = {
       "Content-Type" => "application/json",
       "X-Goog-Api-Key" => api_key,
-      "X-Goog-FieldMask" => "*"
+      "X-Goog-FieldMask" => "currentOpeningHours"
     }
 
     # GETリクエストを送信
@@ -97,15 +91,19 @@ class ShopsController < ApplicationController
     today = Time.now.wday
 
     # 今日の営業終了時間を取得
-    today_period = periods.find { |period| period["close"]["day"] == today }
-    return false unless today_period
+    today_periods = periods.select { |period| period["close"]["day"] == today }
+    return false unless today_periods
 
-    # 営業終了時間を解析
-    closing_time = today_period["close"]["time"] # 例: "0200" (2時)
-    closing_hour = closing_time[0..1].to_i
-    closing_minute = closing_time[2..3].to_i
+    open_late_flag = false
+    today_periods.each do |today_period|
+      # 営業終了時間を解析
+      closing_hour = today_period["close"]["hour"].to_i
+      closing_minute = today_period["close"]["minute"].to_i
 
-    # 終了時間が2時以降かどうか
-    closing_hour > 2 || (closing_hour == 2 && closing_minute == 0)
+      # 終了時間が2時以降かどうか
+      open_late_flag = true if closing_hour > 2 || (closing_hour == 2 && closing_minute == 0)
+    end
+
+    return open_late_flag
   end
 end
