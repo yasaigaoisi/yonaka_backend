@@ -39,16 +39,23 @@ class ShopsController < ApplicationController
 
     places = response.parsed_response["places"]
 
+    # APIレスポンス確認用
+    # filtered_places = []
+    # places.map do |place|
+    #   filtered_places << fetch_place_details(place["id"], api_key)
+    # end
+
     # 詳細情報を取得して夜中2時まで営業しているかを判定
     filtered_places = places.select do |place|
       place_id = place["id"]
+      logger.debug "displayName: #{place["displayName"]}"
       details = fetch_place_details(place_id, api_key)
 
       # 営業時間が取得できない場合は除外
       next false unless details && details["currentOpeningHours"] && details["currentOpeningHours"]["periods"]
 
       # 営業時間の判定
-      open_late?(details["currentOpeningHours"]["periods"])
+      open_late?(details["currentOpeningHours"]["periods"], details["currentOpeningHours"]["openNow"])
     end
 
     # # 必要な情報だけを整形して返す
@@ -86,7 +93,12 @@ class ShopsController < ApplicationController
   end
 
   # 夜中2時まで営業しているかを判定
-  def open_late?(periods)
+  def open_late?(periods, open_now)
+    open_now_bool = if open_now == "true"
+      true
+    else
+      false
+    end
     # 今日が何曜日かを取得 (0: 日曜, 1: 月曜, ...)
     today = Time.now.wday
 
@@ -96,12 +108,21 @@ class ShopsController < ApplicationController
 
     open_late_flag = false
     today_periods.each do |today_period|
+      # 営業開始時間を解析
+      starting_hour = today_period["open"]["hour"].to_i
+
       # 営業終了時間を解析
       closing_hour = today_period["close"]["hour"].to_i
-      closing_minute = today_period["close"]["minute"].to_i
+
+      logger.debug "open_now_flag: #{open_now_bool}"
+      logger.debug "closing_hour: #{closing_hour}"
 
       # 終了時間が2時以降かどうか
-      open_late_flag = true if closing_hour > 2 || (closing_hour == 2 && closing_minute == 0)
+      if open_now_bool
+        if starting_hour > closing_hour && closing_hour >= 2
+          open_late_flag = true
+        end
+      end
     end
 
     return open_late_flag
