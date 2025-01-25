@@ -6,6 +6,7 @@ class ShopsController < ApplicationController
     request_body = {
       includedTypes: ["restaurant"],
       maxResultCount: 10,
+      languageCode: "ja",
       locationRestriction: {
         circle: {
           center: {
@@ -82,11 +83,16 @@ class ShopsController < ApplicationController
     headers = {
       "Content-Type" => "application/json",
       "X-Goog-Api-Key" => api_key,
-      "X-Goog-FieldMask" => "currentOpeningHours"
+      "X-Goog-FieldMask" => "displayName,currentOpeningHours",
+    }
+
+    # クエリ
+    query = {
+      languageCode: "ja"
     }
 
     # GETリクエストを送信
-    response = HTTParty.get(url, headers: headers)
+    response = HTTParty.get(url, headers: headers, query: query)
     return nil unless response.code == 200
 
     response.parsed_response
