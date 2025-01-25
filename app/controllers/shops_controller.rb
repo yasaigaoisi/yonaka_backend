@@ -5,7 +5,7 @@ class ShopsController < ApplicationController
     # リクエストボディの作成
     request_body = {
       includedTypes: ["restaurant"],
-      maxResultCount: 10,
+      maxResultCount: 20,
       languageCode: "ja",
       locationRestriction: {
         circle: {
@@ -25,7 +25,7 @@ class ShopsController < ApplicationController
     headers = {
       "Content-Type" => "application/json",
       "X-Goog-Api-Key" => api_key,
-      "X-Goog-FieldMask" => "places.displayName,places.id"
+      "X-Goog-FieldMask" => "places.id"
     }
 
     # APIエンドポイント
@@ -47,16 +47,17 @@ class ShopsController < ApplicationController
     # end
 
     # 詳細情報を取得して夜中2時まで営業しているかを判定
-    filtered_places = places.select do |place|
-      place_id = place["id"]
-      logger.debug "displayName: #{place["displayName"]}"
-      details = fetch_place_details(place_id, api_key)
+    filtered_places = []
+    places.map do |place|
+      details = fetch_place_details(place["id"], api_key)
 
       # 営業時間が取得できない場合は除外
-      next false unless details && details["currentOpeningHours"] && details["currentOpeningHours"]["periods"]
+      next unless details && details["currentOpeningHours"]
 
       # 営業時間の判定
-      open_late?(details["currentOpeningHours"]["periods"], details["currentOpeningHours"]["openNow"])
+      if open_late?(details)
+        filtered_places << details
+      end
     end
 
     # # 必要な情報だけを整形して返す
@@ -99,7 +100,9 @@ class ShopsController < ApplicationController
   end
 
   # 夜中2時まで営業しているかを判定
-  def open_late?(periods, open_now)
+  def open_late?(details)
+    weekday_descriptions = details["currentOpeningHours"]["weekdayDescriptions"]
+    open_now = details["currentOpeningHours"]["openNow"]
     open_now_bool = if open_now == "true"
       true
     else
@@ -108,29 +111,24 @@ class ShopsController < ApplicationController
     # 今日が何曜日かを取得 (0: 日曜, 1: 月曜, ...)
     today = Time.now.wday
 
-    # 今日の営業終了時間を取得
-    today_periods = periods.select { |period| period["close"]["day"] == today }
-    return false unless today_periods
+    # 今日の最終営業時間を取得
+    today_description = weekday_descriptions[today - 1] # ex) 土曜日: 18時00分～0時00分
+    return false if today_description.split(":")[1] == " 定休日"
+    return true if today_description.split(":")[1] == " 24 時間営業"
+    start_time_str = today_description.split(":")[1].split(",")[-1].split("～")[0]
+    close_time_str = today_description.split(":")[1].split(",")[-1].split("～")[1]
 
-    open_late_flag = false
-    today_periods.each do |today_period|
-      # 営業開始時間を解析
-      starting_hour = today_period["open"]["hour"].to_i
+    # 正規表現で時間と分を抽出
+    start_match_data = start_time_str.match(/(\d+)時(\d+)分/)
+    close_match_data = close_time_str.match(/(\d+)時(\d+)分/)
 
-      # 営業終了時間を解析
-      closing_hour = today_period["close"]["hour"].to_i
+    # 開始時間と終了時間を取得
+    start_hour = start_match_data[1].to_i
+    start_minute = start_match_data[2].to_i
+    close_hour = close_match_data[1].to_i
+    close_minute = close_match_data[2].to_i
 
-      logger.debug "open_now_flag: #{open_now_bool}"
-      logger.debug "closing_hour: #{closing_hour}"
+    return (start_hour > close_hour && close_hour >= 2)
 
-      # 終了時間が2時以降かどうか
-      if open_now_bool
-        if starting_hour > closing_hour && closing_hour >= 2
-          open_late_flag = true
-        end
-      end
-    end
-
-    return open_late_flag
   end
 end
