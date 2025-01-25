@@ -2,43 +2,32 @@ require 'httparty'
 
 class ShopsController < ApplicationController
   def index
-    # リクエストボディの作成
-    request_body = {
-      includedTypes: ["restaurant"],
-      maxResultCount: 20,
-      languageCode: "ja",
-      locationRestriction: {
-        circle: {
-          center: {
-            latitude: params[:latitude].to_f,
-            longitude: params[:longitude].to_f
-          },
-          radius: 500.0
-        }
-      }
-    }
-
     # APIキーを環境変数から取得
     api_key = ENV['GOOGLE_MAPS_API_KEY']
 
-    # HTTPリクエストヘッダーの設定
-    headers = {
-      "Content-Type" => "application/json",
-      "X-Goog-Api-Key" => api_key,
-      "X-Goog-FieldMask" => "places.id"
-    }
+    # オフセットの定義 (約250mずつ分割)
+    offsets = [
+      [0.0022, 0],     # 北
+      [-0.0022, 0],    # 南
+      [0, 0.0022],     # 東
+      [0, -0.0022],    # 西
+      [0.0016, 0.0016],  # 北東
+      [-0.0016, -0.0016], # 南西
+      [0.0016, -0.0016],  # 北西
+      [-0.0016, 0.0016]   # 南東
+    ]
 
-    # APIエンドポイント
-    url = "https://places.googleapis.com/v1/places:searchNearby"
+    # 各範囲で店舗を取得
+    all_places = []
+    offsets.each do |offset|
+      latitude = params[:latitude].to_f + offset[0]
+      longitude = params[:longitude].to_f + offset[1]
+      places = fetch_places(api_key, latitude, longitude)
+      all_places.concat(places.parsed_response["places"]) if places.parsed_response["places"]
+    end
 
-    # HTTPartyでPOSTリクエストを送信
-    response = HTTParty.post(
-      url,
-      body: request_body.to_json,
-      headers: headers
-    )
-
-    places = response.parsed_response["places"]
+    # 重複を除去 (idでユニーク化)
+    all_places.uniq! { |place| place["id"] }
 
     # APIレスポンス確認用
     # filtered_places = []
@@ -48,32 +37,59 @@ class ShopsController < ApplicationController
 
     # 詳細情報を取得して夜中2時まで営業しているかを判定
     filtered_places = []
-    places.map do |place|
-      details = fetch_place_details(place["id"], api_key)
+    all_places.map do |place|
 
       # 営業時間が取得できない場合は除外
-      next unless details && details["currentOpeningHours"]
+      next unless place["currentOpeningHours"]
 
       # 営業時間の判定
-      if open_late?(details)
-        filtered_places << details
+      if open_late?(place)
+        filtered_places << place
       end
     end
-
-    # # 必要な情報だけを整形して返す
-    # result = filtered_places.map do |place|
-    #   {
-    #     name: place["name"],
-    #     address: place["vicinity"],
-    #     rating: place["rating"],
-    #     location: place["geometry"]["location"]
-    #   }
-    # end
 
     render json: filtered_places
   end
 
   private
+
+  # Place searchNearby APIを呼び出して周辺のお店のIDを取得
+  def fetch_places(api_key, latitude, longitude)
+    # リクエストボディの作成
+    request_body = {
+      includedTypes: ["restaurant"],
+      # includedTypes: ["bar"],
+      # includedTypes: ["pub"],
+      maxResultCount: 20,
+      languageCode: "ja",
+      locationRestriction: {
+        circle: {
+          center: {
+            latitude: latitude,
+            longitude: longitude
+          },
+          radius: 250.0
+        }
+      }
+    }
+
+    # HTTPリクエストヘッダーの設定
+    headers = {
+      "Content-Type" => "application/json",
+      "X-Goog-Api-Key" => api_key,
+      "X-Goog-FieldMask" => "places.id,places.currentOpeningHours,places.displayName,places.googleMapsLinks"
+    }
+
+    # APIエンドポイント
+    url = "https://places.googleapis.com/v1/places:searchNearby"
+
+    # HTTPartyでPOSTリクエストを送信
+    HTTParty.post(
+      url,
+      body: request_body.to_json,
+      headers: headers
+    )
+  end
 
   # Place Details APIを呼び出して詳細情報を取得
   def fetch_place_details(place_id, api_key)
@@ -102,12 +118,6 @@ class ShopsController < ApplicationController
   # 夜中2時まで営業しているかを判定
   def open_late?(details)
     weekday_descriptions = details["currentOpeningHours"]["weekdayDescriptions"]
-    open_now = details["currentOpeningHours"]["openNow"]
-    open_now_bool = if open_now == "true"
-      true
-    else
-      false
-    end
     # 今日が何曜日かを取得 (0: 日曜, 1: 月曜, ...)
     today = Time.now.wday
 
@@ -124,9 +134,7 @@ class ShopsController < ApplicationController
 
     # 開始時間と終了時間を取得
     start_hour = start_match_data[1].to_i
-    start_minute = start_match_data[2].to_i
     close_hour = close_match_data[1].to_i
-    close_minute = close_match_data[2].to_i
 
     return (start_hour > close_hour && close_hour >= 2)
 
