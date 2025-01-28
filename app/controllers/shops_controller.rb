@@ -48,7 +48,14 @@ class ShopsController < ApplicationController
       end
     end
 
-    render json: filtered_places
+    results = filtered_places.map do |place|
+      {
+        id: place["id"],
+        name: place["displayName"]["text"]
+      }
+    end
+
+    render json: results
   end
 
   private
